@@ -4,61 +4,13 @@ addpath data
 
 %curdir=cd;
 
-%%Liste des donnees disponible
-datatypeList={...
-    'phantom-40-SNR-200',...%1-> simulation 1
-    'phantom-70-SNR-150',...%2-> simulation 2
-    'tomate-1',...%3
-    'tomate-32',...%4
-    'pomme-1',...% 5
-    'pomme-32',...% 6
-    };
-
 %% Chargement des donnees
 
-% Quelles données ?
-inddata = 3;
+path=['./data/tomate_antenne_tete_2018/serie3_module_1_acc/'];
+Image = getImagefromDicom(path);
+axlim = [120 120 700 500 1600 1200];
 
-%% Chargement
-datatype = datatypeList{inddata};
-switch datatype 
-    case datatypeList{1}
-        Nx  = 40; 
-        Ny  = 40; 
-        SNR = 200;
-        [Mref,tetaRef,T2maps,I0maps,maskRef] = simulphantom(Nx,Ny);
-        Image = addNoise(Mref,SNR);
-        axlim=[108 84 480 432 1020 868];
-
-    case datatypeList{2}
-        Nx  = 70; 
-        Ny  = 70; 
-        SNR = 80;
-        [Mref,tetaRef,T2maps,I0maps,maskRef] = simulphantom(Nx,Ny);
-        Image = addNoise(Mref,SNR);
-
-    case datatypeList{3}
-        path=['./data/tomate_antenne_tete_2018/serie3_module_1_acc/'];
-        Image = getImagefromDicom(path);
-        axlim = [120 120 700 500 1600 1200];
-
-    case datatypeList{4}
-        path=[filesep' 'data/tomate_antenne_tete_2018/serie5_amplitude_32_acc/'];
-        Image = getImagefromDicom(path);
-        axlim=  [120 120 700 500 1600 1200];
-
-    case datatypeList{5}
-        path=[filesep' 'data/pomme_antenne_tete_2018/serie2_module_1_acc/'];
-        Image = getImagefromDicom(path);
-        axlim=  [120 120 700 500 1600 1200];
-    case datatypeList{6}
-        path=[filesep' 'data/pomme_antenne_tete_2018/serie4_module_32_acc/'];
-        Image = getImagefromDicom(path);
-        axlim=  [120 120 700 500 1600 1200];
-end
-
-%% Estimation
-%% Calcul de la dimension de l'image
+% Calcul de la dimension de l'image
 [xdim,ydim,tdim]=size(Image);
 
 params.xdim=xdim;
@@ -69,6 +21,7 @@ params.FirstEcho = 6.5; %Temps du premier echo en ms
 params.DeltaEcho = 6.5; %Temps d'echos entre deux echantillon en ms
 params.EchoTime = (0:params.tdim-1)*params.DeltaEcho+params.FirstEcho;
 
+%% Estimation puis classification (code original, long à exécuter)
 %% Options des algorithmes MM et LM    
 
 options.threshold =.1;
@@ -148,7 +101,7 @@ for indreg = [2] % ou 2 ou [1 2]
         %close
     end
 end
-%% La fonction de classification que j'ai ecrit est utilisable comme suit:
+%% Classification
 nbofclass=6;
 optionsclassif.classifmethod='gmm'; %gmm, kmean
 
@@ -176,6 +129,7 @@ options.A0_percent=1;
 classif_v1(teta,Image,nbofclass,optionsclassif);
 
 %% Deuxième pipeline - PCA puis classification
+% par Olivier Cornet et Damien Alliot
 
 image_cropped = Image(26:105,26:95,:);
 dimx=80;
@@ -239,15 +193,17 @@ X = [Xpca Xest];
 %X = Xpca;
 %X = Xest;
 
+normalized = false;
 %% Normaliser ?
 
 Xm = mean(X,1);
 X = normalize(X,1);
 X = X + Xm;
 
+normalized = true; 
 %% KMEANS
 
-nbofclass=3;
+nbofclass=5;
 figure;
 
 indices = kmeans(X,nbofclass,"Replicates",60);
@@ -271,11 +227,17 @@ axis equal;
 %% GMM
 
 nbofclass=5;
-lambda = 0.01;
-maxiter = 1500;
+lambda = 0.001;
+maxiter = 1000;
+
+if normalized % les courbes de A0,T2 n'ont de sens que si X est non normalisé
+    maxplot = 2;
+else
+    maxplot = 3;
+end
 
 map = colormap(parula);
-color_idx = linspace(1,size(map,1),nbofclass);
+color_idx = linspace(1,size(map,1),nbofclass+1);
 estims = zeros(2,nbofclass);
 
 for g = 1:4
@@ -293,7 +255,7 @@ for g = 1:4
     end
     
     indices = cluster(GMModel,X);
-    subplot(131);
+    subplot(1,maxplot,1);
 
     im = imagesc(unmask(indices,dimx,dimy,1,mask));
     switch(g)
@@ -302,7 +264,7 @@ for g = 1:4
         case 2
             title("Covariance isotrope (diagonale)");
         case 3
-            title("Covariance anisotrope regularisée");
+            title("Covariance anisotrope regularisée (lambda = "+string(lambda)+")");
         case 4
             title("Covariance isotrope (diagonale) régularisée");
     end
@@ -310,10 +272,10 @@ for g = 1:4
     colormap parula
 
     centroids = zeros(nbofclass,2);
-    subplot(132);
+    subplot(1,maxplot,2);
     hold on;
     for i=1:nbofclass
-        plot(X(indices==i,1),X(indices==i,2),'.','Color',map(floor(color_idx(i)),:));
+        plot(X(indices==i,1),X(indices==i,2),'.','Color',map(floor(color_idx(i+1)),:));
         centroids(i,1) = mean(X(indices==i,1));
         centroids(i,2) = mean(X(indices==i,2));
         plot(centroids(i,1),centroids(i,2),'*r');
@@ -321,29 +283,27 @@ for g = 1:4
         ylabel("Deuxième composante principale");
     end
     hold off;
-
-    subplot(133)
-    hold on;
-    x = centroids*coeffs'+mu;
-    for i=1:nbofclass
-        plot(x(i,:),'Color',map(floor(color_idx(i)),:));
-        [~,m,b] = regression(1:200,log(x(i,1:200)));
-        estims(:,i) = [-1/m exp(b)];
-        xreg = exp(m*(1:512)+b);
-        plot(xreg,'--','Color',map(floor(color_idx(i)),:));
-        title("Estimation des temps de relaxation des classes");
-        
+    
+    if ~normalized
+        subplot(1,3,3)
+        hold on;
+        x = centroids*coeffs'+mu;
+        for i=1:nbofclass
+            plot(x(i,:),'Color',map(floor(color_idx(i)),:));
+            [~,m,b] = regression(1:200,log(x(i,1:200)));
+            estims(:,i) = [-1/m exp(b)];
+            xreg = exp(m*(1:512)+b);
+            plot(xreg,'--','Color',map(floor(color_idx(i)),:));
+            title("Estimation des temps de relaxation des classes");
+            xlabel("temps");
+            ylabel("amplitude");
+        end
+        hold off;
     end
-    hold off;
     
     
     
 end
-
-
-%% KNN
-
-%doesn't exist
 
 %% HCA
 MaxClust = 5;
@@ -352,44 +312,38 @@ Distance = "chebychev"; %mahalanobis, seuclidean, chebychev > cityblock, squared
 %indices = clusterdata(X,1.1545);
 subplot(421);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','average');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("average");
 axis equal;
 subplot(422);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','centroid');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("centroid");
 axis equal;
 subplot(423);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','complete');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("complete");
 axis equal;
 subplot(424);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','median');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("median");
 axis equal;
 subplot(425);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','single');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("single");
 axis equal;
 subplot(426);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','ward');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("ward");
 axis equal;
 subplot(427);
 indices = clusterdata(X,'Criterion','distance','MaxClust',MaxClust,'Distance',Distance,'Linkage','weighted');
-imagesc(reshape(indices,dimx,dimy));
+imagesc(unmask(indices,dimx,dimy,1,mask));
 title("weighted");
 axis equal;
-
-%%
-a = zeros(4,3,2);
-a(:,:,1) = [1 2 3; 4 5 6; 7 8 9; 10 11 12];
-a(:,:,2) = 12 + [1 2 3; 4 5 6; 7 8 9; 10 11 12];
-
 
 
